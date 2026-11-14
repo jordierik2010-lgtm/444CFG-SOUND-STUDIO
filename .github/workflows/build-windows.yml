@@ -1,0 +1,100 @@
+name: Build Windows
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Descargar proyecto
+        uses: actions/checkout@v4
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Instalar Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Localizar proyecto
+        shell: pwsh
+        run: |
+          $project = Get-ChildItem -Path . -Filter package.json -Recurse -File |
+            Where-Object { $_.FullName -notmatch 'node_modules' } |
+            Select-Object -First 1
+
+          if (-not $project) {
+            throw "No se encontró package.json"
+          }
+
+          $projectDir = $project.Directory.FullName
+          Add-Content $env:GITHUB_ENV "PROJECT_DIR=$projectDir"
+          Write-Host "Proyecto encontrado: $projectDir"
+
+      - name: Instalar dependencias
+        shell: pwsh
+        run: |
+          Set-Location $env:PROJECT_DIR
+          npm install --no-audit --no-fund
+
+      - name: Comprobar TypeScript
+        shell: pwsh
+        run: |
+          Set-Location $env:PROJECT_DIR
+          npm run typecheck
+
+      - name: Ejecutar pruebas
+        shell: pwsh
+        run: |
+          Set-Location $env:PROJECT_DIR
+          npm test
+
+      - name: Comprobar Rust
+        shell: pwsh
+        run: |
+          Set-Location $env:PROJECT_DIR
+          cargo check --manifest-path src-tauri/Cargo.toml --release
+
+      - name: Compilar EXE
+        shell: pwsh
+        run: |
+          Set-Location $env:PROJECT_DIR
+          npx tauri build --bundles nsis
+
+      - name: Preparar archivos
+        shell: pwsh
+        run: |
+          Set-Location $env:PROJECT_DIR
+
+          New-Item -ItemType Directory -Force -Path output | Out-Null
+
+          $exe = "src-tauri/target/release/444CFG-Sound-Studio.exe"
+
+          if (!(Test-Path $exe)) {
+            throw "No se ha generado el EXE"
+          }
+
+          Copy-Item $exe output/
+
+          $installer = Get-ChildItem `
+            "src-tauri/target/release/bundle/nsis" `
+            -Filter "*.exe" |
+            Select-Object -First 1
+
+          if (!$installer) {
+            throw "No se ha generado el instalador"
+          }
+
+          Copy-Item $installer.FullName output/
+
+      - name: Descargar programa
+        uses: actions/upload-artifact@v4
+        with:
+          name: 444CFG-SOUND-STUDIO-WINDOWS
+          path: '**/output/*.exe'
+          if-no-files-found: error
